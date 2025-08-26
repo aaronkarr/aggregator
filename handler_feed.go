@@ -8,6 +8,9 @@ import (
 	"io"
 	"net/http"
 	"time"
+
+	"github.com/aaronkarr/aggregator/internal/database"
+	"github.com/google/uuid"
 )
 
 type RSSFeed struct {
@@ -73,4 +76,45 @@ func handlerAgg(s *state, cmd command) error {
 	}
 	fmt.Printf("Feed: %v\n", feed)
 	return nil
+}
+
+func handlerAddFeed(s *state, cmd command) error {
+	if len(cmd.Args) != 2 {
+		return fmt.Errorf("usage: %s <name of feed> <url>", cmd.Name)
+	}
+
+	currentUser, err := s.db.GetUser(context.Background(), s.cfg.CurrentUserName)
+	if err != nil {
+		return fmt.Errorf("error fetching current user: %w", err)
+	}
+
+	feedName := cmd.Args[0]
+	feedURL := cmd.Args[1]
+	userID := currentUser.ID
+
+	feed, err := s.db.CreateFeed(context.Background(), database.CreateFeedParams{
+		ID:        uuid.New(),
+		CreatedAt: time.Now().UTC(),
+		UpdatedAt: time.Now().UTC(),
+		Name:      feedName,
+		Url:       feedURL,
+		UserID:    userID,
+	})
+
+	if err != nil {
+		return fmt.Errorf("CreateFeed failed: %w", err)
+	}
+
+	println("New feed created:")
+	printFeed(feed)
+	return nil
+}
+
+func printFeed(feed database.Feed) {
+	fmt.Printf(" * ID:        %v\n", feed.ID)
+	fmt.Printf(" * Created:   %v\n", feed.CreatedAt)
+	fmt.Printf(" * Updated:   %v\n", feed.UpdatedAt)
+	fmt.Printf(" * Name:      %v\n", feed.Name)
+	fmt.Printf(" * URL:       %v\n", feed.Url)
+	fmt.Printf(" * UserID:    %v\n", feed.UserID)
 }
