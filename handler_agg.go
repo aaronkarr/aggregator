@@ -2,10 +2,15 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
+	"log"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/aaronkarr/aggregator/internal/database"
+	"github.com/google/uuid"
 )
 
 func handlerAgg(s *state, cmd command) error {
@@ -24,6 +29,36 @@ func handlerAgg(s *state, cmd command) error {
 	for ; ; <-ticker.C {
 		scrapeFeeds(s)
 	}
+}
+
+func handlerBrowse(s *state, cmd command, user database.User) error {
+	limit := 2
+	if len(cmd.Args) == 1 {
+		if specifiedLimit, err := strconv.Atoi(cmd.Args[0]); err == nil {
+			limit = specifiedLimit
+		} else {
+			return fmt.Errorf("invalid limit (browse <limit>): %w", err)
+		}
+	}
+
+	posts, err := s.db.GetPostsForUser(context.Background(), database.GetPostsForUserParams{
+		UserID: user.ID,
+		Limit:  int32(limit),
+	})
+	if err != nil {
+		return fmt.Errorf("couldn't get posts for user: %w", err)
+	}
+
+	fmt.Printf("Found %d posts for user: %s\n", len(posts), user.Name)
+	for _, post := range posts {
+		fmt.Printf("%s from %s\n", post.PublishedAt.Time.Format("Mon Jan 2"), post.FeedName)
+		fmt.Printf("--- %s ---\n", post.Title)
+		fmt.Printf("    %v\n", post.Description.String)
+		fmt.Printf("Link: %s\n", post.Url)
+		fmt.Println("=====================================")
+	}
+
+	return nil
 }
 
 func scrapeFeeds(s *state) {
@@ -48,7 +83,35 @@ func scrapeFeed(db *database.Queries, feed database.Feed) {
 	}
 
 	for _, item := range feedItem.Channel.Item {
-		fmt.Printf("Found post: %s\n", item.Title)
+		publishedAt := sql.NullTime{}
+		if t, err := time.Parse(time.RFC1123Z, item.PubDate); err == nil {
+			publishedAt = sql.NullTime{
+				Time:  t,
+				Valid: true,
+			}
+		}
+
+		_, err = db.CreatePost(context.Background(), database.CreatePostParams{
+			ID:        uuid.New(),
+			CreatedAt: time.Now().UTC(),
+			UpdatedAt: time.Now().UTC(),
+			FeedID:    feed.ID,
+			Title:     item.Title,
+			Description: sql.NullString{
+				String: item.Description,
+				Valid:  true,
+			},
+			Url:         item.Link,
+			PublishedAt: publishedAt,
+		})
+		if err != nil {
+			if strings.Contains(err.Error(), "duplicate key value violates unique constraint") {
+				continue
+			}
+			log.Printf("Couldn't create post: %v", err)
+			continue
+		}
 	}
+
 	fmt.Printf("Feed %s collected, %v posts found", feed.Name, len(feedItem.Channel.Item))
 }
